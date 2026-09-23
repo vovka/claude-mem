@@ -58,6 +58,7 @@ function buildRoutes(session: ActiveSession, startSession: () => Promise<void>) 
     {} as any,
     {} as any,
     { finalizeSession: async () => { finalizeCalls += 1; } } as any,
+    {} as any,
   );
 
   return { routes, stats: () => ({ finalizeCalls, removed, active }) };
@@ -175,6 +176,30 @@ describe('observer resumes itself after recycling its conversation (#3800)', () 
     await nextTick();
 
     expect(starts).toBe(2);
+  });
+
+  it('stops resuming after repeated transport pauses', async () => {
+    const session = makeSession();
+    let starts = 0;
+
+    const { routes } = buildRoutes(session, async () => {
+      starts += 1;
+      session.abortReason = 'transport:transient';
+    });
+
+    jest.useFakeTimers();
+    try {
+      await routes.ensureGeneratorRunning(session.sessionDbId, 'observation');
+      for (let i = 0; i < 5; i++) {
+        jest.advanceTimersByTime(60_000);
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    } finally {
+      jest.useRealTimers();
+    }
+
+    // The first run plus three capped resumes.
+    expect(starts).toBe(4);
   });
 
   it('does not resume on an auth pause', async () => {

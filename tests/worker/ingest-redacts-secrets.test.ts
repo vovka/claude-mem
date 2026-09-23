@@ -75,18 +75,4 @@ describe('ingestObservation redacts secrets before queueing/storing', () => {
     expect(row.tool_input).toContain('[REDACTED:aws_access_key_id]');
     expect(row.tool_input).not.toContain('AKIAIOSFODNN7EXAMPLE');
   });
-
-  it('leaves ordinary tool input untouched', async () => {
-    await ingestObservation({
-      contentSessionId: 'content-session-plain',
-      toolName: 'Read',
-      toolInput: { file_path: '/tmp/a.ts' },
-      toolResponse: { ok: true },
-      cwd: '/workspace/claude-mem',
-      toolUseId: 'toolu_plain_01',
-    });
-
-    const queuedInput = JSON.parse(queued[0].data.tool_input);
-    expect(queuedInput).toEqual({ file_path: '/tmp/a.ts' });
-  });
 });

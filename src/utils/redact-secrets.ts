@@ -1,30 +1,7 @@
 /**
- * Secret redaction for content bound for the observer LLM, SQLite, and
- * Chroma — the opposite job from services/telemetry/error-scrub.ts.
- *
- * error-scrub.ts scrubs FREE-FORM error text bound for PostHog: it collapses
- * every match to one placeholder ([REDACTED]) and is allowed to be lossy
- * (paths get basenamed, output is length-capped) because the point is never
- * to reconstruct the original text. This module runs on USER DATA we still
- * want to keep — tool inputs/outputs, prompts, file contents — so it must
- * stay lossless except for the specific secret spans it strips, and each
- * match is tagged with its kind ([REDACTED:<kind>]) so stored/summarized
- * text still tells a human (or the observer) what used to be there.
- *
- * Two entry points:
- *   - redactSecrets(text): pattern-based pass over a string (PEM blocks,
- *     provider key prefixes, JWTs, auth headers, URL userinfo, XML secret
- *     elements, and generic KEY=value/KEY: value/--key value assignments
- *     whose key name looks sensitive).
- *   - redactSecretsDeep(value): recurses into a parsed JSON-shaped value
- *     (tool inputs/responses are plain objects before they get
- *     JSON.stringify'd) and additionally redacts any object value whose KEY
- *     matches the sensitive-key regex, even if the value itself doesn't
- *     look like a secret pattern (e.g. `"password": "hunter2"`).
- *
- * Pure, never throws — same "must not blow up ingest" invariant as
- * error-scrub.ts, just enforced with plain try/catch here rather than a
- * shared harness.
+ * Secret redaction for user data bound for the observer LLM, SQLite and Chroma.
+ * Unlike telemetry/error-scrub.ts it is lossless apart from the secret spans,
+ * and tags each match with its kind ([REDACTED:<kind>]).
  */
 
 const tag = (kind: string): string => `[REDACTED:${kind}]`;
@@ -117,20 +94,22 @@ const CLI_FLAG_REGEX = new RegExp(
   'g',
 );
 
+function isQuoted(raw: string): boolean {
+  return raw.length >= 2 && ((raw[0] === '"' && raw.endsWith('"')) || (raw[0] === "'" && raw.endsWith("'")));
+}
+
 function shouldRedactAssignment(key: string, raw: string): boolean {
   if (!SENSITIVE_KEY_REGEX.test(key)) return false;
   // Authorization headers are handled by redactAuthHeader already — skip
   // here so "Authorization: Bearer [REDACTED:auth_header]" isn't re-matched
   // as a plain key:value assignment on the scheme word.
   if (key.toLowerCase() === 'authorization') return false;
-  const quoted = raw.length >= 2 && ((raw[0] === '"' && raw.endsWith('"')) || (raw[0] === "'" && raw.endsWith("'")));
-  if (quoted) return raw.length > 2;
+  if (isQuoted(raw)) return raw.length > 2;
   return isLiteralValue(raw);
 }
 
 function redactedValueFor(raw: string, key: string): string {
-  const quoted = raw.length >= 2 && ((raw[0] === '"' && raw.endsWith('"')) || (raw[0] === "'" && raw.endsWith("'")));
-  const quoteChar = quoted ? raw[0] : '';
+  const quoteChar = isQuoted(raw) ? raw[0] : '';
   return `${quoteChar}${tag(`field:${key.toLowerCase()}`)}${quoteChar}`;
 }
 
@@ -162,26 +141,20 @@ function redactAssignments(text: string): string {
  * Pattern-based redaction pass over a single string. Order: PEM blocks (so
  * later passes never scan a giant base64 blob) → provider key prefixes →
  * JWTs → auth headers → URL userinfo → XML secret elements → CLI flags →
- * generic assignments. Pure, never throws.
+ * generic assignments.
  */
 export function redactSecrets(text: string): string {
-  if (typeof text !== 'string' || text.length === 0) return text ?? '';
-  try {
-    let out = text;
-    out = redactPemBlocks(out);
-    out = redactProviderKeys(out);
-    out = redactJwt(out);
-    out = redactAuthHeader(out);
-    out = redactUrlCredentials(out);
-    out = redactXmlElements(out);
-    out = redactCliFlags(out);
-    out = redactAssignments(out);
-    return out;
-  } catch {
-    // Never throw from the redactor — worst case the raw text passes through
-    // unredacted, which callers should treat as best-effort, not a guarantee.
-    return text;
-  }
+  if (!text) return text ?? '';
+  let out = text;
+  out = redactPemBlocks(out);
+  out = redactProviderKeys(out);
+  out = redactJwt(out);
+  out = redactAuthHeader(out);
+  out = redactUrlCredentials(out);
+  out = redactXmlElements(out);
+  out = redactCliFlags(out);
+  out = redactAssignments(out);
+  return out;
 }
 
 /**
@@ -192,25 +165,21 @@ export function redactSecrets(text: string): string {
  * `"password": "hunter2"`).
  */
 export function redactSecretsDeep(value: unknown, keyHint?: string): unknown {
-  try {
-    if (typeof value === 'string') {
-      if (keyHint && value.length > 0 && SENSITIVE_KEY_REGEX.test(keyHint)) {
-        return tag(`field:${keyHint.toLowerCase()}`);
-      }
-      return redactSecrets(value);
+  if (typeof value === 'string') {
+    if (keyHint && value.length > 0 && SENSITIVE_KEY_REGEX.test(keyHint)) {
+      return tag(`field:${keyHint.toLowerCase()}`);
     }
-    if (Array.isArray(value)) {
-      return value.map(v => redactSecretsDeep(v));
-    }
-    if (value && typeof value === 'object') {
-      const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-        out[k] = redactSecretsDeep(v, k);
-      }
-      return out;
-    }
-    return value;
-  } catch {
-    return value;
+    return redactSecrets(value);
   }
+  if (Array.isArray(value)) {
+    return value.map(v => redactSecretsDeep(v));
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = redactSecretsDeep(v, k);
+    }
+    return out;
+  }
+  return value;
 }

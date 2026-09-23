@@ -51,6 +51,7 @@ import type { TelegramWrapupFormatterInput } from '../../../integrations/Telegra
 const MAX_USER_PROMPT_BYTES = 256 * 1024;
 // ponytail: fixed delay, one retry per pause; add backoff if providers stay overloaded for long.
 const TRANSPORT_RESUME_DELAY_MS = 60_000;
+const MAX_TRANSPORT_RESUMES = 3;
 
 /**
  * Collapse session.abortReason onto a closed telemetry enum. The raw value can
@@ -96,7 +97,7 @@ export class SessionRoutes extends BaseRouteHandler {
     private eventBroadcaster: SessionEventBroadcaster,
     private workerService: WorkerService,
     private completionHandler: SessionCompletionHandler,
-    private openCodeAgent?: OpenCodeProvider,
+    private openCodeAgent: OpenCodeProvider,
   ) {
     super();
     this.sessionManager.setTelegramWrapupFormatter?.(this.formatTelegramWrapup);
@@ -116,7 +117,6 @@ export class SessionRoutes extends BaseRouteHandler {
         case 'openrouter':
           return await this.openRouterAgent.formatTelegramWrapup(input, activeModelId);
         case 'opencode':
-          if (!this.openCodeAgent) throw new Error('OpenCode provider was not initialized');
           return await this.openCodeAgent.formatTelegramWrapup(input, activeModelId);
         default:
           return await this.sdkAgent.formatTelegramWrapup(input, activeModelId);
@@ -347,17 +347,12 @@ export class SessionRoutes extends BaseRouteHandler {
       session.abortController = new AbortController();
     }
 
-    const agent = provider === 'opencode'
-      ? this.openCodeAgent
-      : provider === 'openrouter'
-        ? this.openRouterAgent
-        : (provider === 'gemini' ? this.geminiAgent : this.sdkAgent);
-    if (!agent) throw new Error('OpenCode provider was not initialized');
-    const agentName = provider === 'opencode'
-      ? 'OpenCode'
-      : provider === 'openrouter'
-        ? 'OpenRouter'
-        : (provider === 'gemini' ? 'Gemini' : 'Claude SDK');
+    const [agent, agentName] = ({
+      claude: [this.sdkAgent, 'Claude SDK'],
+      gemini: [this.geminiAgent, 'Gemini'],
+      openrouter: [this.openRouterAgent, 'OpenRouter'],
+      opencode: [this.openCodeAgent, 'OpenCode'],
+    } as const)[provider];
 
     const actualQueueDepth = this.sessionManager.getMessageBuffer().getPendingCount(session.sessionDbId);
 
@@ -545,9 +540,11 @@ export class SessionRoutes extends BaseRouteHandler {
         // of a session is stranded when none arrives. Quota and auth pauses
         // deliberately do NOT resume — those wait on the user. Transient transport
         // failures (e.g. an overloaded free model) resume after a pause, otherwise a
-        // backfill with no further ingest strands the whole buffer.
+        // backfill with no further ingest strands the whole buffer. Transport resumes
+        // are capped per session; any non-transport exit resets the count.
         const isTransport = (reason ?? '').startsWith('transport');
-        if (reason === 'overflow:recycle' || isTransport) {
+        session.consecutiveRestarts = isTransport ? session.consecutiveRestarts + 1 : 0;
+        if (reason === 'overflow:recycle' || (isTransport && session.consecutiveRestarts <= MAX_TRANSPORT_RESUMES)) {
           // Deferred a tick: `session.generatorPromise` is assigned after this
           // chain is built, so resuming inline could be overwritten by that
           // assignment and leave a settled promise blocking every later start.
@@ -720,11 +717,10 @@ export class SessionRoutes extends BaseRouteHandler {
       return;
     }
 
-    const redactSecretsEnabled = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_REDACT_SECRETS !== 'false';
     const cleanedLastAssistantMessage = last_assistant_message
-      ? (redactSecretsEnabled ? redactSecrets(stripMemoryTags(String(last_assistant_message))) : stripMemoryTags(String(last_assistant_message)))
+      ? redactSecrets(stripMemoryTags(String(last_assistant_message)))
       : last_assistant_message;
-    const summaryTimestampEpoch = validateClientTimestamp(timestamp) ?? undefined;
+    const summaryTimestampEpoch = validateClientTimestamp(timestamp);
     await this.sessionManager.queueSummarize(sessionDbId, cleanedLastAssistantMessage, summaryTimestampEpoch);
 
     await this.ensureGeneratorRunning(sessionDbId, 'summarize');
@@ -756,7 +752,7 @@ export class SessionRoutes extends BaseRouteHandler {
     const rawPrompt = typeof req.body.prompt === 'string' ? req.body.prompt : undefined;
     const platformSource = this.getPlatformSourceFromRequest(req);
     const customTitle = req.body.customTitle || undefined;
-    const sessionTimestampEpoch = validateClientTimestamp(req.body.timestamp) ?? undefined;
+    const sessionTimestampEpoch = validateClientTimestamp(req.body.timestamp);
 
     if (rawPrompt && isInternalProtocolPayload(rawPrompt)) {
       logger.debug('HTTP', 'session-init: skipping internal protocol payload before session creation', { contentSessionId });
@@ -774,7 +770,8 @@ export class SessionRoutes extends BaseRouteHandler {
       });
     }
 
-    let prompt = rawPrompt || '[media prompt]';
+    // Redact before anything logs or stores the prompt (sdk_sessions.user_prompt included).
+    let prompt = redactSecrets(rawPrompt || '[media prompt]');
 
     const promptByteLength = Buffer.byteLength(prompt, 'utf8');
     if (promptByteLength > MAX_USER_PROMPT_BYTES) {
@@ -819,9 +816,7 @@ export class SessionRoutes extends BaseRouteHandler {
       logger.debug('HTTP', `[ALIGNMENT] New Session | contentSessionId=${contentSessionId} | prompt#=${promptNumber} | memorySessionId will be captured on first SDK response`);
     }
 
-    const redactSecretsEnabled = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_REDACT_SECRETS !== 'false';
-    const strippedPrompt = stripMemoryTags(prompt);
-    const cleanedPrompt = redactSecretsEnabled ? redactSecrets(strippedPrompt) : strippedPrompt;
+    const cleanedPrompt = stripMemoryTags(prompt);
 
     if (!cleanedPrompt || cleanedPrompt.trim() === '') {
       logger.debug('HOOK', 'Session init - prompt entirely private', {

@@ -54,6 +54,7 @@ function makeRoutes(findSessionDbIdByContentSessionId: ReturnType<typeof mock>, 
     {} as any,
     {} as any,
     {} as any,
+    {} as any,
   );
 }
 
@@ -99,7 +100,8 @@ describe('SessionEnd route', () => {
     new SessionRoutes({
       getSession: () => undefined,
       setTelegramWrapupFormatter: (value: TelegramWrapupFormatter) => { formatter = value; },
-    } as any, {} as any, {} as any, {} as any, { formatTelegramWrapup } as any, {} as any, {} as any, {} as any);
+    } as any, {} as any, {} as any, {} as any, { formatTelegramWrapup } as any,
+    {} as any, {} as any, {} as any, {} as any);
 
     if (fail) await expect(formatter(input)).rejects.toThrow('provider failed');
     else await expect(formatter(input)).resolves.toBe('• Formatted replay');

@@ -224,7 +224,7 @@ to see model IDs available in the installed OpenCode version.
 
 The fork adds:
 
-- `src/services/worker/OpenCodeProvider.ts`
+- `src/services/worker/OpenCodeProvider.ts` and `src/services/worker/opencode/`
   - invokes `opencode run` non-interactively,
   - parses JSON event output,
   - reports token usage when OpenCode provides it,
@@ -292,5 +292,5 @@ Codex/Cursor/Grok Bot.
    if left running alongside the live Claude Code hooks, it will keep tailing the same
    files and double-ingest every new session going forward.
 5. Session summaries queued by the backfill go through whatever `CLAUDE_MEM_PROVIDER` is
-   configured for the worker (e.g. `opencode`, per this fork's own default) — the backfill
+   configured for the worker (`claude` by default) — the backfill
    does not change or bypass that setting.

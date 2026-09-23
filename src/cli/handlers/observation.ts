@@ -28,6 +28,7 @@ async function dispatchToWorker(
       agentId: input.agentId,
       agentType: input.agentType,
       tool_use_id: input.toolUseId,
+      timestamp: input.timestamp,
     },
   );
 

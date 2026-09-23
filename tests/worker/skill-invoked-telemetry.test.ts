@@ -194,6 +194,7 @@ describe('skill_invoked from session-init slash prompts', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
     );
 
     const app = express();
@@ -288,5 +289,13 @@ describe('skill_invoked from session-init slash prompts', () => {
 
     expect(response.ok).toBe(true);
     expect(skillInvokedCalls()).toHaveLength(0);
+  });
+
+  it('stores a redacted prompt in sdk_sessions.user_prompt', async () => {
+    await postInit({ contentSessionId: 'redact-session', project: 'claude-mem', prompt: 'use AKIAIOSFODNN7EXAMPLE' });
+
+    const row = store!.db.prepare('SELECT user_prompt FROM sdk_sessions WHERE content_session_id = ?')
+      .get('redact-session') as { user_prompt: string };
+    expect(row.user_prompt).toBe('use [REDACTED:aws_access_key_id]');
   });
 });

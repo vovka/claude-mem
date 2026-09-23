@@ -1,24 +1,23 @@
 import { describe, it, expect } from 'bun:test';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { providerNeedsAccount } from '../../src/npx-cli/commands/install.js';
 
 const source = readFileSync(
   join(__dirname, '..', '..', 'src', 'npx-cli', 'commands', 'install.ts'),
   'utf-8',
 );
 
-describe('provider account gate', () => {
-  it('exempts explicit claude, host, and opencode installs from the account requirement', () => {
-    expect(source).toContain("return provider !== 'claude' && provider !== 'host' && provider !== 'opencode';");
-  });
-
-  it('still requires an account when no provider was named', () => {
-    expect(source).toContain('if (providerNeedsAccount(options.provider)) {');
-  });
-
-  it('still treats openrouter and gemini as account-backed providers', () => {
-    expect(source).toContain("if (options.provider === 'host' || options.provider === 'opencode') return;");
-    expect(source).toContain("if (options.provider !== 'gemini' && options.provider !== 'openrouter') return;");
+describe('providerNeedsAccount', () => {
+  it.each([
+    ['claude', false],
+    ['host', false],
+    ['opencode', false],
+    ['gemini', true],
+    ['openrouter', true],
+    [undefined, true],
+  ] as const)('%s → %s', (provider, expected) => {
+    expect(providerNeedsAccount(provider)).toBe(expected);
   });
 });
 

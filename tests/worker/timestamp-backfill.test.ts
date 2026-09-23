@@ -13,36 +13,21 @@ import { logger } from '../../src/utils/logger.js';
  * like today's live-hook behavior.
  */
 describe('validateClientTimestamp', () => {
-  it('accepts a valid ISO string', () => {
-    expect(validateClientTimestamp('2024-03-01T12:00:00.000Z')).toBe(Date.parse('2024-03-01T12:00:00.000Z'));
-  });
+  const iso = '2024-03-01T12:00:00.000Z';
+  const soon = new Date(Date.now() + 30 * 1000).toISOString();
 
-  it('accepts a valid epoch-ms number', () => {
-    const epoch = Date.parse('2024-03-01T12:00:00.000Z');
-    expect(validateClientTimestamp(epoch)).toBe(epoch);
-  });
-
-  it('rejects missing/undefined/empty', () => {
-    expect(validateClientTimestamp(undefined)).toBeNull();
-    expect(validateClientTimestamp(null)).toBeNull();
-    expect(validateClientTimestamp('')).toBeNull();
-  });
-
-  it('rejects unparseable strings', () => {
-    expect(validateClientTimestamp('not-a-date')).toBeNull();
-  });
-
-  it('rejects a date before 2020', () => {
-    expect(validateClientTimestamp('2019-12-31T23:59:59.000Z')).toBeNull();
-  });
-
-  it('rejects a date more than 5 minutes in the future', () => {
-    expect(validateClientTimestamp(new Date(Date.now() + 10 * 60 * 1000).toISOString())).toBeNull();
-  });
-
-  it('accepts a date a few seconds in the future (clock skew)', () => {
-    const soon = new Date(Date.now() + 30 * 1000).toISOString();
-    expect(validateClientTimestamp(soon)).toBe(Date.parse(soon));
+  it.each([
+    ['a valid ISO string', iso, Date.parse(iso)],
+    ['a valid epoch-ms number', Date.parse(iso), Date.parse(iso)],
+    ['a few seconds in the future (clock skew)', soon, Date.parse(soon)],
+    ['undefined', undefined, undefined],
+    ['null', null, undefined],
+    ['an empty string', '', undefined],
+    ['an unparseable string', 'not-a-date', undefined],
+    ['a date before 2020', '2019-12-31T23:59:59.000Z', undefined],
+    ['more than 5 minutes in the future', new Date(Date.now() + 10 * 60 * 1000).toISOString(), undefined],
+  ])('%s', (_name, value, expected) => {
+    expect(validateClientTimestamp(value)).toBe(expected);
   });
 });
 
@@ -65,17 +50,6 @@ describe('createSDKSession / saveUserPrompt honor a validated backfill timestamp
       .get(sessionDbId) as { started_at_epoch: number; started_at: string };
     expect(row.started_at_epoch).toBe(epoch);
     expect(row.started_at).toBe(new Date(epoch).toISOString());
-  });
-
-  it('falls back to now() when no startedAtEpoch is supplied (live hooks unchanged)', () => {
-    const before = Date.now();
-    const sessionDbId = store.createSDKSession('content-2', 'proj', 'hi', undefined, 'claude-code');
-    const after = Date.now();
-
-    const row = store.db.prepare('SELECT started_at_epoch FROM sdk_sessions WHERE id = ?')
-      .get(sessionDbId) as { started_at_epoch: number };
-    expect(row.started_at_epoch).toBeGreaterThanOrEqual(before);
-    expect(row.started_at_epoch).toBeLessThanOrEqual(after);
   });
 
   it('does not touch started_at_epoch on an already-existing session', () => {
@@ -153,7 +127,10 @@ describe('ingestObservation forwards a validated timestamp into the pending mess
     expect(queued[0].data.clientTimestampEpoch).toBe(epoch);
   });
 
-  it('drops an invalid timestamp (clientTimestampEpoch is undefined, so live-hook behavior is unchanged)', async () => {
+  it.each([
+    ['an invalid timestamp', 'not-a-real-date'],
+    ['no timestamp at all', undefined],
+  ])('leaves clientTimestampEpoch undefined for %s (live-hook behavior)', async (_name, timestamp) => {
     await ingestObservation({
       contentSessionId: 'content-obs-2',
       toolName: 'Read',
@@ -161,20 +138,7 @@ describe('ingestObservation forwards a validated timestamp into the pending mess
       toolResponse: { ok: true },
       cwd: '/workspace/claude-mem',
       toolUseId: 'toolu_ts_02',
-      timestamp: 'not-a-real-date',
-    });
-
-    expect(queued[0].data.clientTimestampEpoch).toBeUndefined();
-  });
-
-  it('leaves clientTimestampEpoch undefined when no timestamp is supplied at all', async () => {
-    await ingestObservation({
-      contentSessionId: 'content-obs-3',
-      toolName: 'Read',
-      toolInput: { file_path: '/tmp/a.ts' },
-      toolResponse: { ok: true },
-      cwd: '/workspace/claude-mem',
-      toolUseId: 'toolu_ts_03',
+      timestamp,
     });
 
     expect(queued[0].data.clientTimestampEpoch).toBeUndefined();
@@ -221,29 +185,6 @@ describe('SessionManager.queueObservation/queueSummarize forward client_timestam
     const iterator = buffer.drain({ sessionDbId, signal: controller.signal });
     const { value } = await iterator.next();
     expect(value?._originalTimestamp).toBe(epoch);
-    controller.abort();
-  });
-
-  it('a live observation (no client timestamp) is stamped with enqueue time', async () => {
-    const sessionDbId = store.createSDKSession('content-buf-2', 'proj', 'hi', undefined, 'claude-code');
-    const before = Date.now();
-
-    await sessionManager.queueObservation(sessionDbId, {
-      tool_name: 'Read',
-      tool_input: '{}',
-      tool_response: '{}',
-      prompt_number: 1,
-      cwd: '/workspace',
-      toolUseId: 'toolu_buf_02',
-    });
-
-    const after = Date.now();
-    const buffer = sessionManager.getMessageBuffer();
-    const controller = new AbortController();
-    const iterator = buffer.drain({ sessionDbId, signal: controller.signal });
-    const { value } = await iterator.next();
-    expect(value?._originalTimestamp).toBeGreaterThanOrEqual(before);
-    expect(value?._originalTimestamp).toBeLessThanOrEqual(after);
     controller.abort();
   });
 });

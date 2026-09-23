@@ -8,17 +8,19 @@ import type { TranscriptSchema, WatchTarget } from '../../src/services/transcrip
 // Snapshot real modules before mock.module rewrites them process-wide (bun's
 // mock.module is global and mock.restore() does not undo it).
 import * as realSessionInit from '../../src/cli/handlers/session-init.js';
+import * as realObservation from '../../src/cli/handlers/observation.js';
 import * as realWorkerUtils from '../../src/shared/worker-utils.js';
 import * as realShared from '../../src/services/worker/http/shared.js';
 
 const realSessionInitSnapshot = { ...realSessionInit };
+const realObservationSnapshot = { ...realObservation };
 const realWorkerUtilsSnapshot = { ...realWorkerUtils };
 const realSharedSnapshot = { ...realShared };
 
 const sessionInitCalls: NormalizedHookInput[] = [];
 const ingestCalls: Array<Record<string, unknown>> = [];
 const summarizeCalls: string[] = [];
-const observationPosts: Array<Record<string, unknown>> = [];
+const observationCalls: NormalizedHookInput[] = [];
 let inWorkerProcess = true;
 
 mock.module('../../src/cli/handlers/session-init.js', () => ({
@@ -30,11 +32,19 @@ mock.module('../../src/cli/handlers/session-init.js', () => ({
   },
 }));
 
+mock.module('../../src/cli/handlers/observation.js', () => ({
+  observationHandler: {
+    execute: async (input: NormalizedHookInput) => {
+      observationCalls.push(input);
+      return { continue: true, suppressOutput: true };
+    },
+  },
+}));
+
 mock.module('../../src/shared/worker-utils.js', () => ({
   ensureWorkerRunning: async () => true,
   workerHttpRequest: async (apiPath: string, init?: RequestInit) => {
     if (apiPath === '/api/sessions/summarize') summarizeCalls.push(String(init?.body));
-    if (apiPath === '/api/sessions/observations') observationPosts.push(JSON.parse(String(init?.body)));
     return new Response('ok');
   },
 }));
@@ -49,6 +59,7 @@ mock.module('../../src/services/worker/http/shared.js', () => ({
 
 afterAll(() => {
   mock.module('../../src/cli/handlers/session-init.js', () => realSessionInitSnapshot);
+  mock.module('../../src/cli/handlers/observation.js', () => realObservationSnapshot);
   mock.module('../../src/shared/worker-utils.js', () => realWorkerUtilsSnapshot);
   mock.module('../../src/services/worker/http/shared.js', () => realSharedSnapshot);
 });
@@ -150,7 +161,7 @@ describe('claude-code transcript schema (backfill)', () => {
     sessionInitCalls.length = 0;
     ingestCalls.length = 0;
     summarizeCalls.length = 0;
-    observationPosts.length = 0;
+    observationCalls.length = 0;
     inWorkerProcess = true;
   });
 
@@ -158,16 +169,12 @@ describe('claude-code transcript schema (backfill)', () => {
     mock.restore();
   });
 
-  it('maps a real user prompt to session_init', async () => {
+  it('maps a real user prompt to session_init with its original timestamp', async () => {
     await processor.processEntry(userPromptLine, makeWatch(), schema);
     expect(sessionInitCalls).toHaveLength(1);
     expect(sessionInitCalls[0].prompt).toBe('fix the failing test');
     expect(sessionInitCalls[0].sessionId).toBe(sessionId);
     expect(sessionInitCalls[0].cwd).toBe(cwd);
-  });
-
-  it('forwards the transcript line\'s original timestamp to session_init', async () => {
-    await processor.processEntry(userPromptLine, makeWatch(), schema);
     expect(sessionInitCalls[0].timestamp).toBe('2024-03-01T12:00:00.000Z');
   });
 
@@ -183,7 +190,7 @@ describe('claude-code transcript schema (backfill)', () => {
     expect(ingestCalls).toHaveLength(0);
   });
 
-  it('pairs a tool_use block with its later tool_result block into one observation', async () => {
+  it('pairs a tool_use block with its later tool_result block into one observation (in-process and CLI)', async () => {
     const watch = makeWatch();
     await processor.processEntry(toolUseLine, watch, schema);
     expect(ingestCalls).toHaveLength(0); // tool_use alone is pending, no observation yet
@@ -197,33 +204,27 @@ describe('claude-code transcript schema (backfill)', () => {
     // The observation's timestamp is the tool_result line's own time (the event
     // that actually completed it), not the earlier tool_use line's time.
     expect(ingestCalls[0].timestamp).toBe('2024-03-01T12:00:02.000Z');
-  });
 
-  it('posts observations over HTTP when run as the standalone watcher CLI (no in-process ingest context)', async () => {
+    // Standalone watcher CLI (no in-process ingest context) goes through the hook handler instead.
     inWorkerProcess = false;
-    const watch = makeWatch();
     await processor.processEntry(toolUseLine, watch, schema);
     await processor.processEntry(toolResultLine, watch, schema);
-    expect(ingestCalls).toHaveLength(0);
-    expect(observationPosts).toHaveLength(1);
-    expect(observationPosts[0]).toMatchObject({
-      contentSessionId: sessionId,
+    expect(ingestCalls).toHaveLength(1);
+    expect(observationCalls).toHaveLength(1);
+    expect(observationCalls[0]).toMatchObject({
+      sessionId,
       cwd,
-      tool_name: 'Bash',
-      tool_use_id: 'toolu_01',
-      tool_input: { command: 'echo hi' },
+      toolName: 'Bash',
+      toolUseId: 'toolu_01',
+      toolInput: { command: 'echo hi' },
       timestamp: '2024-03-01T12:00:02.000Z',
     });
   });
 
-  it('maps turn_duration to session_end and queues a summary', async () => {
+  it('maps turn_duration to session_end and queues a summary with the turn-end timestamp', async () => {
     await processor.processEntry(turnDurationLine, makeWatch(), schema);
     expect(summarizeCalls).toHaveLength(1);
     expect(JSON.parse(summarizeCalls[0]).contentSessionId).toBe(sessionId);
-  });
-
-  it('summary carries the turn-end event\'s own timestamp', async () => {
-    await processor.processEntry(turnDurationLine, makeWatch(), schema);
     expect(JSON.parse(summarizeCalls[0]).timestamp).toBe('2024-03-01T12:00:03.000Z');
   });
 

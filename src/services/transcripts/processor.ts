@@ -1,12 +1,13 @@
 import path from 'path';
 import { sessionInitHandler } from '../../cli/handlers/session-init.js';
 import { fileEditHandler } from '../../cli/handlers/file-edit.js';
+import { observationHandler } from '../../cli/handlers/observation.js';
 import { ensureWorkerRunning, workerHttpRequest } from '../../shared/worker-utils.js';
 import { DATA_DIR } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
 import { getProjectContext } from '../../utils/project-name.js';
 import { writeAgentsMd } from '../../utils/agents-md-utils.js';
-import { resolveFieldSpec, resolveFields, matchesRule } from './field-utils.js';
+import { resolveFieldSpec, resolveFields, matchesRule, getValueByPath } from './field-utils.js';
 import { expandHomePath, shouldSuppressNativeCodexAgentsContext } from './config.js';
 import type { TranscriptSchema, WatchTarget, SchemaEvent } from './types.js';
 import { normalizePlatformSource } from '../../shared/platform-source.js';
@@ -114,27 +115,10 @@ export class TranscriptEventProcessor {
     return session.project;
   }
 
-  /**
-   * Reads the transcript line's original event time via schema.timestampPath
-   * (e.g. Claude Code JSONL's top-level "timestamp"). Session-level action
-   * handlers (handleSessionInit, sendObservation, queueSummary) read
-   * session.lastEventTimestamp directly rather than threading a param through
-   * every signature — handleEvent updates it right before dispatching, so by
-   * the time an action handler runs it already holds the current event's time.
-   */
-  private resolveTimestamp(
-    entry: unknown,
-    watch: WatchTarget,
-    schema: TranscriptSchema,
-    event: SchemaEvent,
-    session: SessionState
-  ): string | undefined {
-    const ctx = { watch, schema, session } as any;
-    const fieldSpec = event.fields?.timestamp ?? (schema.timestampPath ? { path: schema.timestampPath } : undefined);
-    const resolved = resolveFieldSpec(fieldSpec, entry, ctx);
-    if (typeof resolved === 'string' && resolved.trim()) return resolved;
-    if (typeof resolved === 'number') return new Date(resolved).toISOString();
-    return session.lastEventTimestamp;
+  /** Records the line's original event time (schema.timestampPath); action handlers read it off the session. */
+  private resolveTimestamp(entry: unknown, schema: TranscriptSchema, session: SessionState): void {
+    const value = getValueByPath(entry, schema.timestampPath ?? '');
+    if (typeof value === 'string' && value.trim()) session.lastEventTimestamp = value;
   }
 
   private async handleEvent(
@@ -155,8 +139,7 @@ export class TranscriptEventProcessor {
     if (cwd) session.cwd = cwd;
     const project = this.resolveProject(entry, watch, schema, event, session);
     if (project) session.project = project;
-    const timestamp = this.resolveTimestamp(entry, watch, schema, event, session);
-    if (timestamp) session.lastEventTimestamp = timestamp;
+    this.resolveTimestamp(entry, schema, session);
 
     const fields = resolveFields(event.fields, entry, { watch, schema, session: session as unknown as Record<string, unknown> });
 
@@ -296,8 +279,8 @@ export class TranscriptEventProcessor {
     };
 
     if (!hasIngestContext()) {
-      // Standalone `transcript watch` CLI: no in-process DB, so go through the worker's HTTP route.
-      await this.postObservation(payload);
+      // Standalone `transcript watch` CLI: no in-process DB, so go through the PostToolUse hook handler.
+      await observationHandler.execute({ ...payload, sessionId: session.sessionId, platform: session.platformSource });
       return;
     }
 
@@ -305,27 +288,6 @@ export class TranscriptEventProcessor {
 
     if (!result.ok) {
       throw new Error(`ingestObservation failed: ${result.reason}`);
-    }
-  }
-
-  private async postObservation(payload: Record<string, unknown>): Promise<void> {
-    const response = await workerHttpRequest('/api/sessions/observations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contentSessionId: payload.contentSessionId,
-        cwd: payload.cwd,
-        platformSource: payload.platformSource,
-        tool_name: payload.toolName,
-        tool_input: payload.toolInput,
-        tool_response: payload.toolResponse,
-        tool_use_id: payload.toolUseId,
-        agentId: payload.agentId,
-        timestamp: payload.timestamp,
-      }),
-    });
-    if (!response.ok) {
-      throw new Error(`observation POST failed: ${response.status} ${await response.text()}`);
     }
   }
 

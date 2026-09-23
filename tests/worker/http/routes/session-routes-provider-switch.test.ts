@@ -119,6 +119,7 @@ function makeRoutes(session: ActiveSession, agents: {
     {} as any, // eventBroadcaster — unused by ensureGeneratorRunning
     {} as any, // workerService
     completionHandler as any,
+    {} as any,
   );
 
   return { routes, sessionManager, completionHandler, messageBuffer };

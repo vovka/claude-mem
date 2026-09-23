@@ -114,7 +114,7 @@ export async function ingestObservation(payload: ObservationPayload): Promise<In
   }
 
   const store = dbManager.getSessionStore();
-  const clientTimestampEpoch = validateClientTimestamp(payload.timestamp) ?? undefined;
+  const clientTimestampEpoch = validateClientTimestamp(payload.timestamp);
 
   let sessionDbId: number;
   let promptNumber: number;
@@ -149,12 +149,11 @@ export async function ingestObservation(payload: ObservationPayload): Promise<In
   // (→ the observer prompt), and — once generated — the stored observation
   // text, so redacting once here covers the provider prompt, SQLite, and
   // Chroma together.
-  const redactSecretsEnabled = settings.CLAUDE_MEM_REDACT_SECRETS !== 'false';
   const cleanedToolInput = payload.toolInput !== undefined
-    ? stripMemoryTags(JSON.stringify(redactSecretsEnabled ? redactSecretsDeep(payload.toolInput) : payload.toolInput))
+    ? stripMemoryTags(JSON.stringify(redactSecretsDeep(payload.toolInput)))
     : '{}';
   const cleanedToolResponse = payload.toolResponse !== undefined
-    ? stripMemoryTags(JSON.stringify(redactSecretsEnabled ? redactSecretsDeep(payload.toolResponse) : payload.toolResponse))
+    ? stripMemoryTags(JSON.stringify(redactSecretsDeep(payload.toolResponse)))
     : '{}';
 
   // Dual-write: the durable `tool_uses` side index (v51) alongside — never
