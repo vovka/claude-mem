@@ -2,10 +2,11 @@ import { describe, expect, it } from 'bun:test';
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { validateOpenCodeModel } from '../../src/services/worker/OpenCodeProvider.js';
+import { OpenCodeProvider, validateOpenCodeModel } from '../../src/services/worker/OpenCodeProvider.js';
 import { classifyOpenCodeError, parseOpenCodeJsonOutput } from '../../src/services/worker/opencode/output.js';
 import { runOpenCode } from '../../src/services/worker/opencode/run.js';
 import { buildOpenCodeSafetyConfig, buildOpenCodeSafetyEnv } from '../../src/services/worker/opencode/safety.js';
+import { guardSharedProcessRegistrySingleton } from '../supervisor/process-registry-singleton-guard.js';
 
 const FIXTURES = join(import.meta.dir, '../fixtures/opencode');
 
@@ -18,6 +19,36 @@ function fakeOpenCode(script: string): { binary: string; cwd: string } {
 }
 
 describe('OpenCodeProvider', () => {
+  guardSharedProcessRegistrySingleton('opencode-provider');
+
+  it('bounds query() concurrency to CLAUDE_MEM_MAX_CONCURRENT_AGENTS and releases the slot on failure', async () => {
+    const prevMax = process.env.CLAUDE_MEM_MAX_CONCURRENT_AGENTS;
+    process.env.CLAUDE_MEM_MAX_CONCURRENT_AGENTS = '1';
+    try {
+      const log = join(mkdtempSync(join(tmpdir(), 'opencode-slot-log-')), 'log');
+      const { binary } = fakeOpenCode(
+        `echo "start $(date +%s%3N)" >> '${log}'; sleep 0.3; ` +
+          `cat '${join(FIXTURES, 'kilo-run-ok.jsonl')}'; echo "end $(date +%s%3N)" >> '${log}'`,
+      );
+      const provider = new OpenCodeProvider(null as any, null as any);
+      const config = { apiKey: 'x', model: '', binary, timeoutMs: 5_000 };
+      const query = () => (provider as any).query([], config);
+
+      await Promise.all([query(), query()]);
+
+      const [, start1, , end1, , start2] = readFileSync(log, 'utf-8').trim().split(/\s+/).map(Number);
+      expect(start1).toBeLessThanOrEqual(end1);
+      expect(start2).toBeGreaterThanOrEqual(end1);
+
+      const { binary: failing } = fakeOpenCode('exit 1');
+      await expect((provider as any).query([], { ...config, binary: failing })).rejects.toBeTruthy();
+      await expect(query()).resolves.toBeTruthy();
+    } finally {
+      if (prevMax === undefined) delete process.env.CLAUDE_MEM_MAX_CONCURRENT_AGENTS;
+      else process.env.CLAUDE_MEM_MAX_CONCURRENT_AGENTS = prevMax;
+    }
+  }, 10_000);
+
   it('builds a deny-all, non-sharing safety config', () => {
     const config = buildOpenCodeSafetyConfig() as any;
     expect(config.share).toBe('disabled');

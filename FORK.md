@@ -3,294 +3,140 @@
 This fork keeps **Claude Code as the primary coding agent** while allowing Claude-Mem's
 observation, compaction, and session-summary inference to run through the **OpenCode CLI**.
 
-The goal is narrow:
-
-- Claude Code continues to run the development session.
-- Claude-Mem continues to capture Claude Code hooks, store observations, build summaries,
-  index memory, and expose that memory back to future Claude Code sessions.
+- Claude Code continues to run the development session and Claude-Mem continues to capture
+  its hooks, store observations, build summaries, index memory, and serve that memory back to
+  future sessions.
 - The expensive/high-volume memory-processing calls can be delegated to a model available
   through OpenCode, including free OpenCode models.
-- OpenCode is used only as a non-interactive inference transport. This fork does **not**
-  turn OpenCode into the primary coding agent and does not install a Claude-Mem OpenCode host plugin.
-
-This is intentionally different from broader OpenCode integration work in other forks.
-
-## Motivation
-
-Claude-Mem is useful precisely when new Claude Code sessions are started frequently:
-the durable memory layer preserves decisions, discoveries, files touched, completed work,
-and next steps across those short-lived contexts.
-
-That creates a second stream of model usage, however. The coding model and the memory model
-do not need to be the same model or even come from the same provider.
-
-For this workflow:
-
-```
-Claude Code CLI
-      |
-      | hooks / observations / stop summaries
-      v
-  Claude-Mem
-      |
-      | observer inference
-      v
- OpenCode CLI
-      |
-      v
- free / inexpensive model
-      |
-      v
- SQLite + semantic memory
-      |
-      v
-future Claude Code sessions
-```
-
-Claude remains responsible for coding. OpenCode is just the inference boundary used by the
-Claude-Mem observer.
+- OpenCode is used only as a non-interactive inference transport: this fork does **not** turn
+  OpenCode into the primary coding agent and does not install a Claude-Mem OpenCode host plugin.
 
 ## Why not use the earlier OpenCode-provider fork unchanged?
 
 An earlier implementation proved that invoking `opencode run --format json` as a Claude-Mem
-provider is practical. It also mixed that provider work with broader OpenCode host/plugin
-integration and could run the summarizer with agent permissions inappropriate for a memory
-compression worker.
+provider is practical, but mixed that with broader OpenCode host/plugin integration and could
+run the summarizer with agent permissions inappropriate for a memory compression worker.
 
-A summarizer receives extremely hostile input by construction:
-
-- source code,
-- shell output,
-- tool results,
-- logs,
-- web content,
-- generated text,
-- comments and README files,
-- and arbitrary text copied into a Claude session.
-
-Any of those can contain prompt-injection instructions.
-
-A memory summarizer does not need filesystem, shell, web, MCP, subagent, or editing access.
-Giving it those capabilities creates risk without adding useful functionality.
-
-This fork therefore ports only the provider concept and deliberately makes the OpenCode
-process **tool-less by default**.
+A summarizer receives extremely hostile input by construction (source code, shell output, tool
+results, logs, web content, README/comment text, arbitrary session text), any of which can
+contain prompt-injection instructions. It does not need filesystem, shell, web, MCP, subagent,
+or editing access, so this fork ports only the provider concept and makes the OpenCode process
+**tool-less by default**.
 
 ## Security model
 
 The OpenCode provider is launched with defense in depth rather than relying on a prompt saying
 "do not use tools".
 
-### 1. Dedicated neutral workspace
+1. **Dedicated neutral workspace** — OpenCode runs under `~/.claude-mem/opencode-summarizer/`,
+   not in the repository being observed, so project-local `opencode.json`, `.opencode/`,
+   AGENTS files, and repo instructions can't reach the summarizer's environment.
+2. **Isolated XDG config** — the child gets a separate `XDG_CONFIG_HOME` under Claude-Mem's
+   data directory, so it never loads the user's real global OpenCode config, plugins, MCP
+   definitions, or instructions. A provider that only exists via custom entries in the user's
+   normal OpenCode config may be unavailable here; that's an intentional secure-by-default
+   tradeoff.
+3. **Isolated XDG data/state/cache** — separate `XDG_DATA_HOME`, `XDG_STATE_HOME`, and
+   `XDG_CACHE_HOME` too, instead of the user's real `~/.local/share`/`~/.local/state`/`~/.cache`.
+   Without this, every summarizer run was recorded as a full session in the user's personal
+   Kilo/OpenCode session history. The isolated data dir starts with no `auth.json`; the
+   configured free-tier models (`kilo/kilo-auto/free`, `kilo/inclusionai/ling-3.0-flash-fin:free`,
+   `opencode/big-pickle`) were verified to authenticate and respond against a completely
+   empty, auth-less isolated data dir. A provider that requires stored credentials would not be
+   reachable in this isolated mode.
+4. **Inline deny-all agent** — the provider injects a temporary `claude-mem-summarizer` primary
+   agent via `OPENCODE_CONFIG_CONTENT` with deny-all permissions and disabled tools, and also
+   sets `OPENCODE_PERMISSION={"*":"deny"}`.
+5. **No Claude Code prompt/skills inheritance** — the child disables OpenCode's Claude Code
+   compatibility prompt and skill loading, so it only sees the Claude-Mem observer conversation
+   supplied over stdin.
+6. **Plugins/auxiliary features disabled** — `--pure`, with default plugins, auto-sharing,
+   auto-update checks, LSP downloads, and Exa all disabled.
+7. **Prompt sent through stdin** — session content never appears on the command line.
+8. **No shell interpolation** — the OpenCode binary is spawned directly as an argv array with
+   `shell: false`, and model names are validated before being placed in argv.
 
-OpenCode runs under:
+**What this does not guarantee:** this is application-level isolation, not an OS sandbox.
+OpenCode is still a trusted local program running as your user, and system-managed OpenCode
+configuration may have higher precedence than user configuration. For a hard
+process/filesystem/network boundary, run the memory worker inside an OS/container sandbox as
+well.
 
-```
-~/.claude-mem/opencode-summarizer/workspace
-```
-
-It does not run in the repository being observed. That prevents normal project-local
-`opencode.json`, `.opencode/`, AGENTS files, and repository instructions from becoming part
-of the summarizer's execution environment.
-
-### 2. Isolated XDG config
-
-The child process receives a separate `XDG_CONFIG_HOME` under Claude-Mem's data directory.
-
-This intentionally prevents the summarizer from loading the user's normal global OpenCode
-configuration, plugins, MCP definitions, and global instructions.
-
-A provider that exists *only* because of custom entries in the user's normal OpenCode config
-may not be available in this isolated mode. That tradeoff is intentional: secure isolation is
-the default.
-
-### 2b. Isolated XDG data/state/cache
-
-The child also receives separate `XDG_DATA_HOME`, `XDG_STATE_HOME`, and `XDG_CACHE_HOME`
-directories under Claude-Mem's data directory, instead of inheriting the user's real
-`~/.local/share`/`~/.local/state`/`~/.cache`. Without this, every summarizer run was recorded
-as a full session (transcript, tokens, model) in the user's personal
-`~/.local/share/kilo/kilo.db` (and OpenCode's equivalent `opencode.db`), leaking Claude-Mem
-transcript copies into the user's normal Kilo/VS Code and OpenCode session history.
-
-This also means the isolated data dir starts with no `auth.json`. Verified empirically (see
-`buildOpenCodeSafetyEnv` comment) that the configured free-tier models — `kilo/kilo-auto/free`,
-`kilo/inclusionai/ling-3.0-flash-fin:free`, and `opencode/big-pickle` — all authenticate and
-respond successfully against a completely empty, auth-less isolated data dir, so no
-`auth.json` copy-in step was added. A provider that requires stored credentials would not be
-reachable in this isolated mode; that is the same secure-by-default tradeoff as section 2.
-
-### 3. Inline deny-all agent
-
-The provider injects a temporary `claude-mem-summarizer` primary agent through
-`OPENCODE_CONFIG_CONTENT`.
-
-Both the global inline config and the agent itself specify deny-all permissions and disabled
-tools.
-
-The child also receives `OPENCODE_PERMISSION={"*":"deny"}`.
-
-### 4. No Claude Code prompt/skills inheritance
-
-The child disables OpenCode's Claude Code compatibility prompt and skill loading. The
-summarizer should receive only the Claude-Mem observer conversation supplied over stdin.
-
-### 5. Plugins and auxiliary features disabled
-
-The invocation uses `--pure` and disables default plugins, auto-sharing, auto-update checks,
-LSP downloads, and Exa.
-
-### 6. Prompt sent through stdin
-
-Session content is never placed in the process command line. This avoids command-line length
-limits and keeps transcript text out of normal process listings.
-
-### 7. No shell interpolation
-
-The OpenCode binary is spawned directly with an argv array and `shell: false`.
-Model names are validated before being placed in argv.
-
-### What this isolation does not guarantee
-
-This is **application-level isolation, not an operating-system sandbox**. It prevents the model
-from being intentionally given OpenCode tools and keeps ordinary user/project OpenCode
-configuration out of the worker, but it does not sandbox the OpenCode executable itself.
-OpenCode is still a trusted local program running as your user.
-
-System-managed OpenCode configuration may also have higher precedence than user configuration.
-If your environment requires a hard process/filesystem/network boundary, run the memory worker
-inside an OS/container sandbox in addition to these controls.
-
-## Important boundary: model privacy
-
-Tool isolation does **not** make a remote model local.
-
-If `CLAUDE_MEM_OPENCODE_MODEL` selects a hosted/free model, the text Claude-Mem sends for
-observation and summarization is sent to that model's provider through OpenCode.
-
-That text can contain:
-
-- source code,
-- file paths,
-- tool inputs and outputs,
-- architecture details,
-- logs,
-- and other content from the Claude Code session.
-
-Use a hosted model only if that data handling is acceptable for the project.
-
-For private work, configure OpenCode to use an appropriate local model/provider.
+Tool isolation also does **not** make a remote model local: if `CLAUDE_MEM_OPENCODE_MODEL`
+selects a hosted/free model, the observation/summarization text (which can include source code,
+file paths, tool inputs/outputs, architecture details, logs) is sent to that model's provider
+through OpenCode. Use a hosted model only if that data handling is acceptable for the project;
+configure a local model/provider in OpenCode for private work.
 
 ## Configuration
 
-When running this fork's CLI, the narrow non-interactive installer path is:
+Non-interactive installer path (skips claude-mem account/OAuth setup, since OpenCode owns
+provider auth):
 
 ```bash
 npx claude-mem install --provider opencode --model provider/model
 ```
 
-This skips claude-mem account/OAuth setup because OpenCode owns provider authentication.
-The normal interactive installer choices are intentionally left unchanged.
-
-You can also configure it directly in `~/.claude-mem/settings.json`:
+Or set directly in `~/.claude-mem/settings.json`:
 
 ```json
 {
   "CLAUDE_MEM_PROVIDER": "opencode",
-  "CLAUDE_MEM_OPENCODE_MODEL": "provider/model"
-}
-```
-
-Optional executable override:
-
-```json
-{
+  "CLAUDE_MEM_OPENCODE_MODEL": "provider/model",
   "CLAUDE_MEM_OPENCODE_PATH": "/absolute/path/to/opencode"
 }
 ```
 
-If `CLAUDE_MEM_OPENCODE_MODEL` is empty, OpenCode chooses its default model. For predictable
-cost behavior, explicitly set a model.
+`CLAUDE_MEM_OPENCODE_PATH` is optional (defaults to `opencode` on PATH). If
+`CLAUDE_MEM_OPENCODE_MODEL` is empty, OpenCode chooses its default model; set it explicitly for
+predictable cost. Run `opencode models` to see model IDs available in your installed OpenCode.
 
-Use:
+`CLAUDE_MEM_MAX_CONCURRENT_AGENTS` (default `2`) caps concurrent Claude SDK agent subprocesses
+and also bounds concurrent Kilo/OpenCode summarizer processes spawned by this provider.
 
-```bash
-opencode models
-```
-
-to see model IDs available in the installed OpenCode version.
-
-## What this fork changes
-
-The fork adds:
-
-- `src/services/worker/OpenCodeProvider.ts` and `src/services/worker/opencode/`
-  - invokes `opencode run` non-interactively,
-  - parses JSON event output,
-  - reports token usage when OpenCode provides it,
-  - classifies common auth/quota/rate-limit/setup errors,
-  - applies the isolation controls described above.
-- provider dispatch support for `CLAUDE_MEM_PROVIDER=opencode`.
-- worker/session routing support for the new provider.
-- settings keys:
-  - `CLAUDE_MEM_OPENCODE_MODEL`
-  - `CLAUDE_MEM_OPENCODE_PATH`
-- quota-breaker typing for OpenCode.
-- tests for safety configuration, output parsing, error classification, model validation,
-  and provider selection.
+Note: there is no `CLAUDE_MEM_REDACT_SECRETS` setting — secret redaction (`src/utils/redact-secrets.ts`)
+runs unconditionally on data bound for the observer LLM, SQLite, and Chroma.
 
 ## What this fork deliberately does not change
 
-It does **not**:
-
-- install a Claude-Mem plugin into OpenCode,
-- modify `~/.config/opencode/AGENTS.md`,
-- register Claude-Mem MCP inside OpenCode,
-- use OpenCode as the session-capture host,
-- auto-approve permissions,
-- use `--auto` or `--dangerously-skip-permissions`,
-- give the summarizer filesystem or shell access.
-
-The primary host remains Claude Code.
+It does **not**: install a Claude-Mem plugin into OpenCode, modify `~/.config/opencode/AGENTS.md`,
+register Claude-Mem MCP inside OpenCode, use OpenCode as the session-capture host, auto-approve
+permissions, use `--auto` or `--dangerously-skip-permissions`, or give the summarizer filesystem
+or shell access. The primary host remains Claude Code.
 
 ## Upstream relationship
 
 The intent is to keep this fork easy to rebase on
-[thedotmack/claude-mem](https://github.com/thedotmack/claude-mem).
-
-The OpenCode functionality is therefore isolated to one provider and small dispatch/wiring
-changes rather than introducing a second full host integration.
-
-If an equivalent secure provider is accepted upstream, this fork should ideally become
-unnecessary.
+[thedotmack/claude-mem](https://github.com/thedotmack/claude-mem): the OpenCode functionality is
+isolated to one provider (`src/services/worker/OpenCodeProvider.ts`, `src/services/worker/opencode/`)
+plus small dispatch/wiring changes, rather than a second full host integration. If an equivalent
+secure provider is accepted upstream, this fork should ideally become unnecessary.
 
 ## Backfilling historical Claude Code transcripts
 
-Claude-Mem normally captures Claude Code sessions live, through hooks. To retroactively
-ingest transcripts from sessions that happened before Claude-Mem was installed (or while it
-was disabled), this fork adds a `claude-code` transcript-watch schema that replays the
-existing `~/.claude/projects/<encoded-path>/*.jsonl` files through the same engine used for
-Codex/Cursor/Grok Bot.
+Claude-Mem normally captures Claude Code sessions live, through hooks. To retroactively ingest
+transcripts from sessions that happened before Claude-Mem was installed (or while it was
+disabled), this fork adds a `claude-code` transcript-watch schema that replays the existing
+`~/.claude/projects/<encoded-path>/*.jsonl` files through the same engine used for Codex/Cursor/Grok Bot.
 
-1. Copy `transcript-watch.claude-code.example.json` and edit its `watches[0].path` to point
-   at one project's transcript directory (the placeholder is
-   `~/.claude/projects/-home-USER-dev-PROJECT/*.jsonl`; the encoded directory name is your
-   `cwd` with `/` replaced by `-`).
+1. Copy `transcript-watch.claude-code.example.json` and edit its `watches[0].path` to point at
+   one project's transcript directory (the placeholder is
+   `~/.claude/projects/-home-USER-dev-PROJECT/*.jsonl`; the encoded directory name is your `cwd`
+   with `/` replaced by `-`).
 2. Run the watcher against that config:
 
    ```bash
    bun plugin/scripts/transcript-watcher.cjs watch --config /path/to/your-backfill-config.json
    ```
 
-   (equivalently `claude-mem transcript watch --config ...` if you're using an installed
-   `claude-mem` build).
-3. `startAtEnd: false` in the example config makes it replay every line from offset 0, so
-   the whole history gets ingested. Progress is recorded per-file in the config's own
-   `stateFile` (`~/.claude-mem/transcript-backfill-state.json` by default) — a rerun resumes
-   from where it left off rather than re-ingesting from the start.
-4. **Stop the watcher (Ctrl-C) once it has caught up.** It has no notion of "backfill done";
-   if left running alongside the live Claude Code hooks, it will keep tailing the same
-   files and double-ingest every new session going forward.
+   (equivalently `claude-mem transcript watch --config ...` for an installed `claude-mem` build).
+3. `startAtEnd: false` in the example config replays every line from offset 0, so the whole
+   history gets ingested. Progress is recorded per-file in the config's `stateFile`
+   (`~/.claude-mem/transcript-backfill-state.json` by default), so a rerun resumes rather than
+   re-ingesting from the start.
+4. **Stop the watcher (Ctrl-C) once it has caught up.** It has no notion of "backfill done"; left
+   running alongside the live Claude Code hooks, it will keep tailing the same files and
+   double-ingest every new session going forward.
 5. Session summaries queued by the backfill go through whatever `CLAUDE_MEM_PROVIDER` is
-   configured for the worker (`claude` by default) — the backfill
-   does not change or bypass that setting.
+   configured for the worker (`claude` by default) — the backfill does not change or bypass that
+   setting.
