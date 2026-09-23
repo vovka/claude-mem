@@ -5,6 +5,7 @@ import type { ActiveSession, ConversationMessage } from '../worker-types.js';
 import { OpenAICompatibleProvider, type ProviderQueryResult } from './OpenAICompatibleProvider.js';
 import { resolveLlmTimeoutMs } from './retry.js';
 import { logger } from '../../utils/logger.js';
+import { waitForSlot } from '../../supervisor/process-registry.js';
 import { runOpenCode } from './opencode/run.js';
 import { OPENCODE_SUMMARIZER_AGENT, prepareOpenCodeWorkspace } from './opencode/safety.js';
 
@@ -83,7 +84,16 @@ export class OpenCodeProvider extends OpenAICompatibleProvider<OpenCodeConfig> {
     const args = ['--pure', 'run', '--format', 'json', '--agent', OPENCODE_SUMMARIZER_AGENT, '--dir', workspace];
     if (config.model) args.push('--model', config.model);
     const input = serializeConversation(history);
-    return runOpenCode({ binary: config.binary, args, cwd: workspace, input, timeoutMs: config.timeoutMs, signal });
+    // Same pool as the Claude SDK: one kilo/opencode process per slot, never one per session.
+    const slot = await waitForSlot(
+      () => parseInt(SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_MAX_CONCURRENT_AGENTS, 10) || 2,
+      signal,
+    );
+    try {
+      return await runOpenCode({ binary: config.binary, args, cwd: workspace, input, timeoutMs: config.timeoutMs, signal });
+    } finally {
+      slot.release();
+    }
   }
 }
 
