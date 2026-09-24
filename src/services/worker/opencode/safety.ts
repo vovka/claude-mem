@@ -88,6 +88,8 @@ export function buildOpenCodeSafetyEnv(
     OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: 'true',
     OPENCODE_DISABLE_AUTOUPDATE: 'true',
     OPENCODE_DISABLE_LSP_DOWNLOAD: 'true',
+    // The models.dev refresh on every start stalls up to 2 min; the cached models.json is enough.
+    OPENCODE_DISABLE_MODELS_FETCH: 'true',
     OPENCODE_ENABLE_EXA: 'false',
     OPENCODE_ENABLE_PARALLEL: 'false',
     OPENCODE_ENABLE_QUESTION_TOOL: 'false',

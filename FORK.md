@@ -89,7 +89,8 @@ Or set directly in `~/.claude-mem/settings.json`:
 
 `CLAUDE_MEM_OPENCODE_PATH` is optional (defaults to `opencode` on PATH). If
 `CLAUDE_MEM_OPENCODE_MODEL` is empty, OpenCode chooses its default model; set it explicitly for
-predictable cost. Run `opencode models` to see model IDs available in your installed OpenCode.
+predictable cost. It may be a comma-separated list (`a/x,b/y`): models are tried in order and a
+rate-limited, overloaded or server-erroring model falls back to the next. Run `opencode models` to see model IDs available in your installed OpenCode.
 
 `CLAUDE_MEM_MAX_CONCURRENT_AGENTS` (default `2`) caps concurrent Claude SDK agent subprocesses
 and also bounds concurrent Kilo/OpenCode summarizer processes spawned by this provider.

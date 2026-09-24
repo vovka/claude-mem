@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { OpenCodeProvider, validateOpenCodeModel } from '../../src/services/worker/OpenCodeProvider.js';
+import { OpenCodeProvider, parseOpenCodeModels, validateOpenCodeModel } from '../../src/services/worker/OpenCodeProvider.js';
 import { classifyOpenCodeError, parseOpenCodeJsonOutput } from '../../src/services/worker/opencode/output.js';
 import { runOpenCode } from '../../src/services/worker/opencode/run.js';
 import { buildOpenCodeSafetyConfig, buildOpenCodeSafetyEnv } from '../../src/services/worker/opencode/safety.js';
@@ -170,6 +170,36 @@ describe('OpenCodeProvider', () => {
   it('honors an already-aborted signal without spawning', async () => {
     const run = runOpenCode({ binary: '/nonexistent', args: [], cwd: tmpdir(), input: '', timeoutMs: 5_000, signal: AbortSignal.abort() });
     await expect(run).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('parses a comma-separated model list', () => {
+    expect(parseOpenCodeModels(' a/x , ,b/y,')).toEqual(['a/x', 'b/y']);
+    expect(parseOpenCodeModels('')).toEqual([]);
+    expect(() => parseOpenCodeModels('a/x,--help')).toThrow();
+  });
+
+  it('falls back to the next model on overload and starts from it next time', async () => {
+    const log = join(mkdtempSync(join(tmpdir(), 'opencode-models-log-')), 'log');
+    const overloaded = JSON.stringify({ type: 'error', error: { message:
+      '{"code":503,"message":"Upstream error from Nvidia: Service temporarily overloaded"}' } });
+    const { binary } = fakeOpenCode(
+      `for a; do m="$a"; done; echo "$m" >> '${log}'; ` +
+        `if [ "$m" = bad/model ]; then echo '${overloaded}'; exit 1; fi; cat '${join(FIXTURES, 'kilo-run-ok.jsonl')}'`,
+    );
+    const provider = new OpenCodeProvider(null as any, null as any);
+    const config = { apiKey: 'x', model: 'bad/model,good/model', binary, timeoutMs: 5_000 };
+    await expect((provider as any).query([], config)).resolves.toMatchObject({ content: 'OK', servedModel: 'good/model' });
+    await expect((provider as any).query([], config)).resolves.toMatchObject({ content: 'OK' });
+    expect(readFileSync(log, 'utf-8').trim().split('\n')).toEqual(['bad/model', 'good/model', 'good/model']);
+  });
+
+  it('does not fall back on auth errors', async () => {
+    const log = join(mkdtempSync(join(tmpdir(), 'opencode-auth-log-')), 'log');
+    const { binary } = fakeOpenCode(`echo x >> '${log}'; cat '${join(FIXTURES, 'kilo-run-error.jsonl')}'; exit 1`);
+    const provider = new OpenCodeProvider(null as any, null as any);
+    const config = { apiKey: 'x', model: 'auth/one,auth/two', binary, timeoutMs: 5_000 };
+    await expect((provider as any).query([], config)).rejects.toMatchObject({ kind: 'auth_invalid' });
+    expect(readFileSync(log, 'utf-8').trim().split('\n')).toHaveLength(1);
   });
 
   it('rejects model values that look like CLI flags', () => {
