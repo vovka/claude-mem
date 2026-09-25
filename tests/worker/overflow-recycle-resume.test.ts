@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, jest } from 'bun:test';
 import type { ActiveSession } from '../../src/services/worker-types.js';
-import { resetQuotaCooldownsForTesting } from '../../src/shared/quota-cooldown.js';
+import { recordQuotaExhausted, resetQuotaCooldownsForTesting } from '../../src/shared/quota-cooldown.js';
 import { resetDependencyStatusesForTesting } from '../../src/shared/dependency-health.js';
 
 const { SessionRoutes } = await import('../../src/services/worker/http/routes/SessionRoutes.js');
@@ -152,6 +152,67 @@ describe('observer resumes itself after recycling its conversation (#3800)', () 
     await nextTick();
 
     expect(starts).toBe(1);
+  });
+
+  it('retries a quota-gated start once the cooldown elapses, with no further ingest', async () => {
+    const session = makeSession();
+    let starts = 0;
+    const { routes } = buildRoutes(session, async () => {
+      starts += 1;
+      await new Promise<void>(() => {});
+    });
+    const sources: string[] = [];
+    const ensure = routes.ensureGeneratorRunning.bind(routes);
+    routes.ensureGeneratorRunning = (id: number, source: string) => { sources.push(source); return ensure(id, source); };
+
+    jest.useFakeTimers();
+    try {
+      recordQuotaExhausted('claude', 'quota exhausted');
+      await routes.ensureGeneratorRunning(session.sessionDbId, 'observation');
+      expect(starts).toBe(0);
+      expect((routes as any).quotaResumeTimers.size).toBe(1);
+      jest.setSystemTime(new Date(Date.now() + 31 * 60_000));
+      jest.advanceTimersByTime(31 * 60_000);
+      // The retry's admission check runs behind the per-session lock; settle it while the clock is still faked.
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(sources).toEqual(['observation', 'quota-resume']);
+    expect(starts).toBe(1);
+    expect((routes as any).quotaResumeTimers.size).toBe(0);
+  });
+
+  it('retries a session whose own request hit the quota once the cooldown elapses', async () => {
+    const session = makeSession();
+    let starts = 0;
+    const { routes } = buildRoutes(session, async () => {
+      starts += 1;
+      if (starts === 1) {
+        session.abortReason = 'quota:weekly';
+        return;
+      }
+      await new Promise<void>(() => {});
+    });
+
+    jest.useFakeTimers();
+    try {
+      await routes.ensureGeneratorRunning(session.sessionDbId, 'observation');
+      await session.generatorPromise;
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      jest.advanceTimersByTime(60_000);
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+      expect(starts).toBe(1);
+      jest.setSystemTime(new Date(Date.now() + 31 * 60_000));
+      jest.advanceTimersByTime(31 * 60_000);
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(starts).toBe(2);
+    expect(session.lastGeneratorSource).toBe('quota-resume');
   });
 
   it('resumes after a delay on a transient transport pause (overloaded provider)', async () => {

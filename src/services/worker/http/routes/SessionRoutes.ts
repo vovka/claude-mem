@@ -94,6 +94,10 @@ export class SessionRoutes extends BaseRouteHandler {
   // logic this now gates.
   private ensureGeneratorLocks = new Map<number, Promise<void>>();
 
+  // One pending quota-resume retry per session: a backfill sends no further
+  // ingest, so without this a session gated by the quota breaker never restarts.
+  private quotaResumeTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
   constructor(
     private sessionManager: SessionManager,
     private dbManager: DatabaseManager,
@@ -327,6 +331,7 @@ export class SessionRoutes extends BaseRouteHandler {
           ? Math.max(0, QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS - (Date.now() - cooldown.armedAtMs))
           : 0,
       });
+      this.scheduleQuotaResume(sessionDbId, cooldown);
       return;
     }
 
@@ -336,6 +341,25 @@ export class SessionRoutes extends BaseRouteHandler {
     await this.startGeneratorWithProvider(
       session, selectedProvider, source, admission.claimId, gatewayProbeClaimId,
     );
+  }
+
+  private scheduleQuotaResume(sessionDbId: number, cooldown: ReturnType<typeof getQuotaCooldown>): void {
+    if (this.quotaResumeTimers.has(sessionDbId)) return;
+    const remaining = cooldown ? QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS - (Date.now() - cooldown.armedAtMs) : 0;
+    // A probe in flight leaves nothing to wait out, so poll until it settles.
+    const delay = (remaining > 0 ? remaining : 15_000) + Math.random() * 30_000;
+    const timer = setTimeout(() => {
+      this.quotaResumeTimers.delete(sessionDbId);
+      if (!this.sessionManager.getSession(sessionDbId)) return;
+      if (this.sessionManager.getMessageBuffer().getPendingCount(sessionDbId) === 0) return;
+      void this.ensureGeneratorRunning(sessionDbId, 'quota-resume').catch(error => {
+        logger.error('SESSION', 'Failed to resume the observer after the quota cooldown', {
+          sessionId: sessionDbId,
+        }, error instanceof Error ? error : new Error(String(error)));
+      });
+    }, delay);
+    timer.unref?.();
+    this.quotaResumeTimers.set(sessionDbId, timer);
   }
 
   private async startGeneratorWithProvider(
@@ -474,6 +498,7 @@ export class SessionRoutes extends BaseRouteHandler {
           // does not immediately buy the same refusal again (#3634).
           if (isClassified(error) && error.kind === 'quota_exhausted') {
             recordQuotaExhausted(provider, error.message);
+            this.scheduleQuotaResume(session.sessionDbId, getQuotaCooldown(provider));
           }
           recordObserverFailure(provider, isClassified(error)
             ? { message: error.message, kind: error.kind, code: error.code, action: error.action, url: error.url, requestId: error.requestId }
@@ -515,6 +540,8 @@ export class SessionRoutes extends BaseRouteHandler {
         if (normalizeAbortReason(reason) === 'quota') {
           const quotaMessage = 'Provider reported the inference allowance exhausted';
           recordQuotaExhausted(provider, quotaMessage, reason?.split(':')[1]);
+          // Not resumed now, but after the cooldown: a backfill sends no further ingest.
+          this.scheduleQuotaResume(session.sessionDbId, getQuotaCooldown(provider));
           // Quota returned as assistant prose never throws, so it never reaches
           // the .catch above and never armed the health ledger. Without this the
           // session-start warning is structurally blind to an entire outage
