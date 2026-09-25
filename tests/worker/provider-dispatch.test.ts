@@ -109,6 +109,13 @@ describe('provider-dispatch', () => {
       expect(getSelectedProvider()).toBe('opencode');
     });
 
+    it('returns codex when the Codex provider is selected', () => {
+      process.env.CLAUDE_MEM_PROVIDER = 'codex';
+      process.env.CLAUDE_MEM_OPENROUTER_API_KEY = '';
+      process.env.CLAUDE_MEM_GEMINI_API_KEY = '';
+      expect(getSelectedProvider()).toBe('codex');
+    });
+
     it('returns claude for the default provider selection', () => {
       process.env.CLAUDE_MEM_PROVIDER = 'claude';
       process.env.CLAUDE_MEM_GEMINI_API_KEY = '';

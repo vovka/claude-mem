@@ -13,6 +13,7 @@ describe('providerNeedsAccount', () => {
     ['claude', false],
     ['host', false],
     ['opencode', false],
+    ['codex', false],
     ['gemini', true],
     ['openrouter', true],
     [undefined, true],

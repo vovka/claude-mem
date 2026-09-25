@@ -332,7 +332,7 @@ export function ContextSettingsModal({
             >
               <FormField
                 label="AI Provider"
-                tooltip="Choose the provider that generates observations: Claude (via Agent SDK), Gemini (via REST API), OpenRouter, or OpenCode (via CLI) — also used by the claude-mem observer"
+                tooltip="Choose the provider that generates observations: Claude (via Agent SDK), Gemini (via REST API), OpenRouter, OpenCode or Codex (via CLI) — also used by the claude-mem observer"
               >
                 <select
                   value={formState.CLAUDE_MEM_PROVIDER || 'claude'}
@@ -342,6 +342,7 @@ export function ContextSettingsModal({
                   <option value="gemini">Gemini (uses API key)</option>
                   <option value="openrouter">OpenRouter / claude-mem observer</option>
                   <option value="opencode">OpenCode (uses the OpenCode CLI)</option>
+                  <option value="codex">Codex (uses the Codex CLI with your ChatGPT login)</option>
                 </select>
               </FormField>
 

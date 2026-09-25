@@ -332,7 +332,7 @@ export async function processAgentResponse(
   // Provider enum for telemetry, derived once so the invalid-output and
   // success paths stamp the same value.
   const agentProviders: Record<string, string> =
-    { SDK: 'claude', Gemini: 'gemini', OpenRouter: 'openrouter', OpenCode: 'opencode' };
+    { SDK: 'claude', Gemini: 'gemini', OpenRouter: 'openrouter', OpenCode: 'opencode', Codex: 'codex' };
   const providerName = session.currentProvider ?? agentProviders[agentName] ?? 'claude';
 
   if (!parsed.valid) {

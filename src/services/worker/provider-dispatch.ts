@@ -21,6 +21,7 @@ import { isCmemGatewayUrl, writeProFallbackAt } from '../../shared/cmem-gateway.
 import { isGeminiAvailable, isGeminiSelected } from './GeminiProvider.js';
 import { isOpenRouterAvailable, isOpenRouterSelected } from './OpenRouterProvider.js';
 import { isOpenCodeSelected } from './OpenCodeProvider.js';
+import { isCodexSelected } from './CodexProvider.js';
 import type { ClassifiedProviderError } from './provider-errors.js';
 import { releaseQuotaProbe, tryAdmitQuotaProbe } from '../../shared/quota-cooldown.js';
 
@@ -45,7 +46,7 @@ export function shouldUseCmemFallback(
  * handed back to `releaseCmemGatewayProbe` when that run ends.
  */
 export interface ProviderSelection {
-  provider: 'claude' | 'gemini' | 'openrouter' | 'opencode';
+  provider: 'claude' | 'gemini' | 'openrouter' | 'opencode' | 'codex';
   gatewayProbeClaimId: number | null;
 }
 
@@ -54,8 +55,9 @@ export interface ProviderSelection {
  * is safe to call from anywhere — but a caller about to actually SEND must use
  * `selectProviderForGenerator` instead, or it becomes part of the herd.
  */
-export function getSelectedProvider(): 'claude' | 'gemini' | 'openrouter' | 'opencode' {
+export function getSelectedProvider(): 'claude' | 'gemini' | 'openrouter' | 'opencode' | 'codex' {
   if (isOpenCodeSelected()) return 'opencode';
+  if (isCodexSelected()) return 'codex';
   if (isOpenRouterSelected() && isOpenRouterAvailable()) {
     const settings = SettingsDefaultsManager.loadFromFile(paths.settings());
     if (
@@ -92,6 +94,9 @@ export function getSelectedProvider(): 'claude' | 'gemini' | 'openrouter' | 'ope
 export function selectProviderForGenerator(): ProviderSelection {
   if (isOpenCodeSelected()) {
     return { provider: 'opencode', gatewayProbeClaimId: null };
+  }
+  if (isCodexSelected()) {
+    return { provider: 'codex', gatewayProbeClaimId: null };
   }
   if (isOpenRouterSelected() && isOpenRouterAvailable()) {
     const settings = SettingsDefaultsManager.loadFromFile(paths.settings());

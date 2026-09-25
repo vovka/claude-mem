@@ -885,12 +885,12 @@ function mergeSettings(updates: Record<string, string>): boolean {
   }
 }
 
-type ProviderId = 'claude' | 'gemini' | 'openrouter' | 'opencode' | 'host';
+type ProviderId = 'claude' | 'gemini' | 'openrouter' | 'opencode' | 'codex' | 'host';
 /**
  * What the installer prompt may offer. `cmem` is a prompt-only sentinel: picking
  * it configures the generic OpenAI-compatible path (base URL + model + key) and
  * persists CLAUDE_MEM_PROVIDER='openrouter'. The worker understands
- * 'claude' | 'gemini' | 'openrouter' | 'opencode', so 'cmem' must never reach settings.json.
+ * 'claude' | 'gemini' | 'openrouter' | 'opencode' | 'codex', so 'cmem' must never reach settings.json.
  */
 type ProviderChoice = ProviderId | 'cmem';
 // Phase 1d: Persisted DB literals (`server_beta_schema_migrations`, job_type
@@ -1192,6 +1192,19 @@ async function promptProvider(
     }
     log.info(`Configured OpenCode observer${options.model ? ` with model=${options.model}` : ''}.`);
     return 'opencode';
+  }
+
+  if (selectedProvider === 'codex') {
+    const wrote = mergeSettings({
+      CLAUDE_MEM_PROVIDER: 'codex',
+      ...(options.model ? { CLAUDE_MEM_CODEX_MODEL: options.model } : {}),
+    });
+    if (!wrote) {
+      p.cancel('Could not save the Codex observer configuration.');
+      process.exit(1);
+    }
+    log.info(`Configured Codex observer${options.model ? ` with model=${options.model}` : ''}.`);
+    return 'codex';
   }
 
   if (selectedProvider === 'host') {
@@ -1866,12 +1879,12 @@ async function promptTelemetryOptIn(): Promise<void> {
  * must happen first.
  */
 export function providerNeedsAccount(provider: InstallOptions['provider']): boolean {
-  return provider !== 'claude' && provider !== 'host' && provider !== 'opencode';
+  return provider !== 'claude' && provider !== 'host' && provider !== 'opencode' && provider !== 'codex';
 }
 
 export interface InstallOptions {
   ide?: string;
-  provider?: 'claude' | 'gemini' | 'openrouter' | 'opencode' | 'host';
+  provider?: 'claude' | 'gemini' | 'openrouter' | 'opencode' | 'codex' | 'host';
   model?: string;
   noAutoStart?: boolean;
   disableAutoMemory?: boolean;
@@ -1939,7 +1952,7 @@ function validateNonInteractiveProvider(
     }, summary);
   }
 
-  if (options.provider === 'host' || options.provider === 'opencode') return;
+  if (options.provider === 'host' || options.provider === 'opencode' || options.provider === 'codex') return;
   if (options.provider !== 'gemini' && options.provider !== 'openrouter') return;
   const keyName = options.provider === 'gemini'
     ? 'CLAUDE_MEM_GEMINI_API_KEY'
@@ -2237,6 +2250,8 @@ async function runInstallCommandInner(options: InstallOptions, summary: InstallS
       ? 'host observer uses the logged-in host agent over a local OpenAI-compatible shim.'
       : options.provider === 'opencode'
         ? 'OpenCode owns model/provider authentication; no claude-mem account is required.'
+        : options.provider === 'codex'
+        ? 'Codex uses your ChatGPT login (~/.codex/auth.json); no claude-mem account is required.'
         : '--provider claude runs memory on your own Anthropic plan.';
     log.info(`Skipping claude-mem login: ${skipReason}`);
   }

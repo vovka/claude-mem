@@ -93,7 +93,31 @@ predictable cost. It may be a comma-separated list (`a/x,b/y`): models are tried
 rate-limited, overloaded or server-erroring model falls back to the next. Run `opencode models` to see model IDs available in your installed OpenCode.
 
 `CLAUDE_MEM_MAX_CONCURRENT_AGENTS` (default `2`) caps concurrent Claude SDK agent subprocesses
-and also bounds concurrent Kilo/OpenCode summarizer processes spawned by this provider.
+and also bounds concurrent Kilo/OpenCode summarizer processes spawned by this provider and the Codex provider.
+
+## Codex provider
+
+`CLAUDE_MEM_PROVIDER=codex` summarizes through the OpenAI Codex CLI (`codex exec --json -s read-only`)
+using your ChatGPT subscription login. Run `codex login` once, then:
+
+```bash
+npx claude-mem install --provider codex [--model <model>]
+```
+
+```json
+{
+  "CLAUDE_MEM_PROVIDER": "codex",
+  "CLAUDE_MEM_CODEX_MODEL": "",
+  "CLAUDE_MEM_CODEX_PATH": "codex"
+}
+```
+
+Codex runs with an isolated `CODEX_HOME` at `~/.claude-mem/codex-summarizer/home/` whose
+`config.toml` is generated (model, `model_reasoning_effort = "low"`, history persistence off); your
+own `~/.codex/config.toml` (proxies, plugins, skills, MCP) is never loaded. `auth.json` in that home
+is a **symlink** to `~/.codex/auth.json`, not a copy, because Codex refreshes tokens in place and a
+copy would go stale. `OPENAI_*` / `CODEX_*` env vars are stripped from the child. `CLAUDE_MEM_CODEX_PATH`
+is file-only (not writable over HTTP); an empty `CLAUDE_MEM_CODEX_MODEL` uses the Codex default model.
 
 Note: there is no `CLAUDE_MEM_REDACT_SECRETS` setting — secret redaction (`src/utils/redact-secrets.ts`)
 runs unconditionally on data bound for the observer LLM, SQLite, and Chroma.

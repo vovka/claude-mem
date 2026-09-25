@@ -13,6 +13,7 @@ import { ClaudeProvider } from '../../ClaudeProvider.js';
 import { GeminiProvider } from '../../GeminiProvider.js';
 import { OpenRouterProvider } from '../../OpenRouterProvider.js';
 import { OpenCodeProvider } from '../../OpenCodeProvider.js';
+import { CodexProvider } from '../../CodexProvider.js';
 import { getSelectedProvider, recordCmemFallbackIfEligible, releaseCmemGatewayProbe, selectProviderForGenerator } from '../../provider-dispatch.js';
 import type { WorkerService } from '../../../worker-service.js';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
@@ -103,6 +104,7 @@ export class SessionRoutes extends BaseRouteHandler {
     private workerService: WorkerService,
     private completionHandler: SessionCompletionHandler,
     private openCodeAgent: OpenCodeProvider,
+    private codexAgent: CodexProvider,
   ) {
     super();
     this.sessionManager.setTelegramWrapupFormatter?.(this.formatTelegramWrapup);
@@ -123,6 +125,8 @@ export class SessionRoutes extends BaseRouteHandler {
           return await this.openRouterAgent.formatTelegramWrapup(input, activeModelId);
         case 'opencode':
           return await this.openCodeAgent.formatTelegramWrapup(input, activeModelId);
+        case 'codex':
+          return await this.codexAgent.formatTelegramWrapup(input, activeModelId);
         default:
           return await this.sdkAgent.formatTelegramWrapup(input, activeModelId);
       }
@@ -296,7 +300,7 @@ export class SessionRoutes extends BaseRouteHandler {
   private async admitAndStartGenerator(
     session: NonNullable<ReturnType<typeof this.sessionManager.getSession>>,
     sessionDbId: number,
-    selectedProvider: 'claude' | 'gemini' | 'openrouter' | 'opencode',
+    selectedProvider: 'claude' | 'gemini' | 'openrouter' | 'opencode' | 'codex',
     source: string,
     gatewayProbeClaimId: number | null,
   ): Promise<void> {
@@ -336,7 +340,7 @@ export class SessionRoutes extends BaseRouteHandler {
 
   private async startGeneratorWithProvider(
     session: ReturnType<typeof this.sessionManager.getSession>,
-    provider: 'claude' | 'gemini' | 'openrouter' | 'opencode',
+    provider: 'claude' | 'gemini' | 'openrouter' | 'opencode' | 'codex',
     source: string,
     /** The quota probe this run claimed, or null when it was admitted without one. */
     quotaProbeClaimId: number | null,
@@ -363,6 +367,7 @@ export class SessionRoutes extends BaseRouteHandler {
       gemini: [this.geminiAgent, 'Gemini'],
       openrouter: [this.openRouterAgent, 'OpenRouter'],
       opencode: [this.openCodeAgent, 'OpenCode'],
+      codex: [this.codexAgent, 'Codex'],
     } as const)[provider];
 
     const actualQueueDepth = this.sessionManager.getMessageBuffer().getPendingCount(session.sessionDbId);

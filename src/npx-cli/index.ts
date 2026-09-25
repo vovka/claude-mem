@@ -24,8 +24,8 @@ ${styleText('bold', 'Install Commands')} (no Bun required):
   ${styleText('cyan', 'npx claude-mem')}                     Interactive install
   ${styleText('cyan', 'npx claude-mem install')}              Interactive install
   ${styleText('cyan', 'npx claude-mem install --ide <id>')}   Install for specific IDE
-  ${styleText('cyan', 'npx claude-mem install --provider claude|gemini|openrouter|opencode|host')}   Set LLM provider non-interactively
-  ${styleText('cyan', 'npx claude-mem install --model <id>')}   Set model (provider=claude or provider=opencode)
+  ${styleText('cyan', 'npx claude-mem install --provider claude|gemini|openrouter|opencode|codex|host')}   Set LLM provider non-interactively
+  ${styleText('cyan', 'npx claude-mem install --model <id>')}   Set model (provider=claude, opencode or codex)
   ${styleText('cyan', 'npx claude-mem install --no-auto-start')}   Skip worker auto-start at the end
   ${styleText('cyan', 'npx claude-mem install --disable-auto-memory')}   Explicitly disable Claude Code native auto-memory
   ${styleText('cyan', 'npx claude-mem install --runtime worker|server')}   Select runtime non-interactively (server brings up Docker pg+redis, generates an API key, injects the IDE MCP config)
@@ -81,8 +81,8 @@ function parseInstallOptions(argv: string[]): InstallOptions {
   const flag = (name: string): string | undefined =>
     typeof values[name] === 'string' ? (values[name] as string) : undefined;
   const provider = flag('provider');
-  if (provider !== undefined && !['claude', 'gemini', 'openrouter', 'opencode', 'host'].includes(provider)) {
-    console.error(`Unknown --provider: ${provider}. Allowed: claude, gemini, openrouter, opencode, host`);
+  if (provider !== undefined && !['claude', 'gemini', 'openrouter', 'opencode', 'codex', 'host'].includes(provider)) {
+    console.error(`Unknown --provider: ${provider}. Allowed: claude, gemini, openrouter, opencode, codex, host`);
     process.exit(1);
   }
   const runtime = flag('runtime');

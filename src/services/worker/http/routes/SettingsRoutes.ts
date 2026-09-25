@@ -65,6 +65,7 @@ function redactSecretSettings<T extends object>(settings: T): T {
 const FILE_ONLY_SETTING_KEYS = new Set([
   'CLAUDE_CODE_PATH',
   'CLAUDE_MEM_OPENCODE_PATH',
+  'CLAUDE_MEM_CODEX_PATH',
 ]);
 
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
@@ -185,7 +186,7 @@ export class SettingsRoutes extends BaseRouteHandler {
     // GET and an unchanged mask is skipped on POST. Observation TV / Chroma /
     // Telegram / CloudSync / Redis tokens remain file/env only.
     //
-    // Executable spawn paths (CLAUDE_CODE_PATH / CLAUDE_MEM_OPENCODE_PATH) are
+    // Executable spawn paths (CLAUDE_CODE_PATH / CLAUDE_MEM_OPENCODE_PATH / CLAUDE_MEM_CODEX_PATH) are
     // also file/env only: those values become binaries passed to posix_spawn,
     // so they must not be HTTP-writable.
     const settingKeys = [
@@ -204,6 +205,7 @@ export class SettingsRoutes extends BaseRouteHandler {
       'CLAUDE_MEM_OPENROUTER_SITE_URL',
       'CLAUDE_MEM_OPENROUTER_APP_NAME',
       'CLAUDE_MEM_OPENCODE_MODEL',
+      'CLAUDE_MEM_CODEX_MODEL',
       'CLAUDE_MEM_DATA_DIR',
       'CLAUDE_MEM_LOG_LEVEL',
       'CLAUDE_MEM_PYTHON_VERSION',
@@ -261,9 +263,9 @@ export class SettingsRoutes extends BaseRouteHandler {
 
   private validateSettings(settings: any): { valid: boolean; error?: string } {
     if (settings.CLAUDE_MEM_PROVIDER) {
-    const validProviders = ['claude', 'gemini', 'openrouter', 'opencode'];
+    const validProviders = ['claude', 'gemini', 'openrouter', 'opencode', 'codex'];
     if (!validProviders.includes(settings.CLAUDE_MEM_PROVIDER)) {
-      return { valid: false, error: 'CLAUDE_MEM_PROVIDER must be "claude", "gemini", "openrouter", or "opencode"' };
+      return { valid: false, error: 'CLAUDE_MEM_PROVIDER must be "claude", "gemini", "openrouter", "opencode", or "codex"' };
       }
     }
 

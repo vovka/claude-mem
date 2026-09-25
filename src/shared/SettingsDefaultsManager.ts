@@ -38,6 +38,8 @@ export interface SettingsDefaults {
   CLAUDE_MEM_OPENROUTER_APP_NAME: string;
   CLAUDE_MEM_OPENCODE_MODEL: string;
   CLAUDE_MEM_OPENCODE_PATH: string;
+  CLAUDE_MEM_CODEX_MODEL: string;
+  CLAUDE_MEM_CODEX_PATH: string;
   CLAUDE_MEM_DATA_DIR: string;
   CLAUDE_MEM_LOG_LEVEL: string;
   CLAUDE_MEM_PYTHON_VERSION: string;
@@ -194,6 +196,8 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_OPENROUTER_APP_NAME: 'claude-mem',  // App name for OpenRouter analytics
     CLAUDE_MEM_OPENCODE_MODEL: '',  // Empty = let OpenCode choose its default model; set provider/model for predictable cost.
     CLAUDE_MEM_OPENCODE_PATH: 'opencode',  // Executable name or absolute path for the isolated OpenCode observer subprocess.
+    CLAUDE_MEM_CODEX_MODEL: '',  // Empty = let Codex choose its default model.
+    CLAUDE_MEM_CODEX_PATH: 'codex',  // Executable name or absolute path for the isolated Codex observer subprocess.
     CLAUDE_MEM_DATA_DIR: join(homedir(), '.claude-mem'),
     CLAUDE_MEM_LOG_LEVEL: 'INFO',
     CLAUDE_MEM_PYTHON_VERSION: '3.13',
